@@ -1,0 +1,119 @@
+﻿Contracts sheet — data dictionary for LLM consumers,,,,,
+,,,,,
+Domain overview,,,,,
+"Each row in 'Contracts' = one real-estate purchase contract (872 total). The buyer pays the total price in up to 4 installments (Вноска 1..4). Each installment is the sum of payments triggered by up to 8 contractual events: ДГ (down payment), ПД (preliminary contract), СМР Банка (construction — bank-financed), СМР Кеш (construction — cash), Доплащане 1, Доплащане 2, Нотариален акт (notary deed), Договор за заем (loan agreement). Not every event occurs for every contract; blanks mean the event did not contribute to that installment. All monetary values are in EUR.",,,,,
+,,,,,
+Column reference,,,,,
+,,,,,
+Column,Header (BG),English name,Type,Unit,Description
+A,Договор,contract_title,text,,"Contract title. Format: '<buyer>-<building>-<apartment/unit>'. Free-text, uniquely identifies a contract."
+B,Контакт,buyer_name,text,,Buyer's full legal name.
+C,Търговец,salesperson,text,,Salesperson / broker who closed the deal.
+D,Преди/След,pre_or_post_completion,enum,,Whether the contract was signed before ('Преди') or after ('След') building completion.
+E,Сграда,building,text,,Name of the building/development the unit is in.
+F,Status,status,text,,"Unit composition/status code. Examples: 'А' (apartment only), 'А+Г/ПМ' (apartment + garage or parking)."
+G,Обща дължима сума,total_due,number,EUR,Total contract price owed by the buyer.
+H,Кредит,uses_credit,enum,,Whether the purchase is financed with a bank loan: 'Да' (yes) or 'Не' (no).
+I,Първа вноска,installment_1_due,number,EUR,Total amount due for the first installment of this contract.
+J,Първа вноска платено,installment_1_paid,number,EUR,Total amount paid toward the first installment. Equals the sum of the 8 event-amount columns in this block.
+K,Първа вноска остава,installment_1_remaining,number,EUR,Remaining unpaid amount for the first installment = installment_1_due − installment_1_paid.
+L,ДГ — сума (В1),down_payment_amount_i1,number,EUR,Amount contributed by the 'ДГ' event to the first installment. Initial down payment (deposit) event. Blank = this event did not contribute to this installment.
+M,ДГ — дата (В1),down_payment_date_i1,date,yyyy-mm-dd,Date on which the 'ДГ' payment for the first installment was made (or is scheduled). Blank if event did not contribute to this installment.
+N,ПД — сума (В1),preliminary_contract_amount_i1,number,EUR,Amount contributed by the 'ПД' event to the first installment. Preliminary contract signing payment. Blank = this event did not contribute to this installment.
+O,ПД — дата (В1),preliminary_contract_date_i1,date,yyyy-mm-dd,Date on which the 'ПД' payment for the first installment was made (or is scheduled). Blank if event did not contribute to this installment.
+P,СМР Банка — сума (В1),construction_bank_amount_i1,number,EUR,Amount contributed by the 'СМР Банка' event to the first installment. Construction milestone payment funded via bank loan. Blank = this event did not contribute to this installment.
+Q,СМР Банка — дата (В1),construction_bank_date_i1,date,yyyy-mm-dd,Date on which the 'СМР Банка' payment for the first installment was made (or is scheduled). Blank if event did not contribute to this installment.
+R,СМР Кеш — сума (В1),construction_cash_amount_i1,number,EUR,Amount contributed by the 'СМР Кеш' event to the first installment. Construction milestone payment paid in cash. Blank = this event did not contribute to this installment.
+S,СМР Кеш — дата (В1),construction_cash_date_i1,date,yyyy-mm-dd,Date on which the 'СМР Кеш' payment for the first installment was made (or is scheduled). Blank if event did not contribute to this installment.
+T,Доплащане 1 — сума (В1),additional_payment_1_amount_i1,number,EUR,Amount contributed by the 'Доплащане 1' event to the first installment. First supplemental/additional payment. Blank = this event did not contribute to this installment.
+U,Доплащане 1 — дата (В1),additional_payment_1_date_i1,date,yyyy-mm-dd,Date on which the 'Доплащане 1' payment for the first installment was made (or is scheduled). Blank if event did not contribute to this installment.
+V,Доплащане 2 — сума (В1),additional_payment_2_amount_i1,number,EUR,Amount contributed by the 'Доплащане 2' event to the first installment. Second supplemental/additional payment. Blank = this event did not contribute to this installment.
+W,Доплащане 2 — дата (В1),additional_payment_2_date_i1,date,yyyy-mm-dd,Date on which the 'Доплащане 2' payment for the first installment was made (or is scheduled). Blank if event did not contribute to this installment.
+X,Нотариален акт — сума (В1),notary_deed_amount_i1,number,EUR,Amount contributed by the 'Нотариален акт' event to the first installment. Payment due at notarization (transfer of title). Blank = this event did not contribute to this installment.
+Y,Нотариален акт — дата (В1),notary_deed_date_i1,date,yyyy-mm-dd,Date on which the 'Нотариален акт' payment for the first installment was made (or is scheduled). Blank if event did not contribute to this installment.
+Z,Договор за заем — сума (В1),loan_agreement_amount_i1,number,EUR,"Amount contributed by the 'Договор за заем' event to the first installment. Payment tied to a loan-agreement event (rare, ~20 contracts). Blank = this event did not contribute to this installment."
+AA,Договор за заем — дата (В1),loan_agreement_date_i1,date,yyyy-mm-dd,Date on which the 'Договор за заем' payment for the first installment was made (or is scheduled). Blank if event did not contribute to this installment.
+AB,✓ Сума събития (В1),installment_1_computed_sum,number (formula),EUR,Live SUM of the 8 event amounts in this installment block. Used for validation; should equal installment_1_paid.
+AC,Δ (В1),installment_1_delta,number (formula),EUR,Validation delta = installment_1_computed_sum − installment_1_paid. Should be 0; non-zero values flagged in red indicate a data inconsistency.
+AD,Втора вноска,installment_2_due,number,EUR,Total amount due for the second installment of this contract.
+AE,Втора вноска платено,installment_2_paid,number,EUR,Total amount paid toward the second installment. Equals the sum of the 8 event-amount columns in this block.
+AF,Втора вноска остава,installment_2_remaining,number,EUR,Remaining unpaid amount for the second installment = installment_2_due − installment_2_paid.
+AG,ДГ — сума (В2),down_payment_amount_i2,number,EUR,Amount contributed by the 'ДГ' event to the second installment. Initial down payment (deposit) event. Blank = this event did not contribute to this installment.
+AH,ДГ — дата (В2),down_payment_date_i2,date,yyyy-mm-dd,Date on which the 'ДГ' payment for the second installment was made (or is scheduled). Blank if event did not contribute to this installment.
+AI,ПД — сума (В2),preliminary_contract_amount_i2,number,EUR,Amount contributed by the 'ПД' event to the second installment. Preliminary contract signing payment. Blank = this event did not contribute to this installment.
+AJ,ПД — дата (В2),preliminary_contract_date_i2,date,yyyy-mm-dd,Date on which the 'ПД' payment for the second installment was made (or is scheduled). Blank if event did not contribute to this installment.
+AK,СМР Банка — сума (В2),construction_bank_amount_i2,number,EUR,Amount contributed by the 'СМР Банка' event to the second installment. Construction milestone payment funded via bank loan. Blank = this event did not contribute to this installment.
+AL,СМР Банка — дата (В2),construction_bank_date_i2,date,yyyy-mm-dd,Date on which the 'СМР Банка' payment for the second installment was made (or is scheduled). Blank if event did not contribute to this installment.
+AM,СМР Кеш — сума (В2),construction_cash_amount_i2,number,EUR,Amount contributed by the 'СМР Кеш' event to the second installment. Construction milestone payment paid in cash. Blank = this event did not contribute to this installment.
+AN,СМР Кеш — дата (В2),construction_cash_date_i2,date,yyyy-mm-dd,Date on which the 'СМР Кеш' payment for the second installment was made (or is scheduled). Blank if event did not contribute to this installment.
+AO,Доплащане 1 — сума (В2),additional_payment_1_amount_i2,number,EUR,Amount contributed by the 'Доплащане 1' event to the second installment. First supplemental/additional payment. Blank = this event did not contribute to this installment.
+AP,Доплащане 1 — дата (В2),additional_payment_1_date_i2,date,yyyy-mm-dd,Date on which the 'Доплащане 1' payment for the second installment was made (or is scheduled). Blank if event did not contribute to this installment.
+AQ,Доплащане 2 — сума (В2),additional_payment_2_amount_i2,number,EUR,Amount contributed by the 'Доплащане 2' event to the second installment. Second supplemental/additional payment. Blank = this event did not contribute to this installment.
+AR,Доплащане 2 — дата (В2),additional_payment_2_date_i2,date,yyyy-mm-dd,Date on which the 'Доплащане 2' payment for the second installment was made (or is scheduled). Blank if event did not contribute to this installment.
+AS,Нотариален акт — сума (В2),notary_deed_amount_i2,number,EUR,Amount contributed by the 'Нотариален акт' event to the second installment. Payment due at notarization (transfer of title). Blank = this event did not contribute to this installment.
+AT,Нотариален акт — дата (В2),notary_deed_date_i2,date,yyyy-mm-dd,Date on which the 'Нотариален акт' payment for the second installment was made (or is scheduled). Blank if event did not contribute to this installment.
+AU,Договор за заем — сума (В2),loan_agreement_amount_i2,number,EUR,"Amount contributed by the 'Договор за заем' event to the second installment. Payment tied to a loan-agreement event (rare, ~20 contracts). Blank = this event did not contribute to this installment."
+AV,Договор за заем — дата (В2),loan_agreement_date_i2,date,yyyy-mm-dd,Date on which the 'Договор за заем' payment for the second installment was made (or is scheduled). Blank if event did not contribute to this installment.
+AW,✓ Сума събития (В2),installment_2_computed_sum,number (formula),EUR,Live SUM of the 8 event amounts in this installment block. Used for validation; should equal installment_2_paid.
+AX,Δ (В2),installment_2_delta,number (formula),EUR,Validation delta = installment_2_computed_sum − installment_2_paid. Should be 0; non-zero values flagged in red indicate a data inconsistency.
+AY,Трета вноска,installment_3_due,number,EUR,Total amount due for the third installment of this contract.
+AZ,Трета вноска платено,installment_3_paid,number,EUR,Total amount paid toward the third installment. Equals the sum of the 8 event-amount columns in this block.
+BA,Трета вноска остава,installment_3_remaining,number,EUR,Remaining unpaid amount for the third installment = installment_3_due − installment_3_paid.
+BB,ДГ — сума (В3),down_payment_amount_i3,number,EUR,Amount contributed by the 'ДГ' event to the third installment. Initial down payment (deposit) event. Blank = this event did not contribute to this installment.
+BC,ДГ — дата (В3),down_payment_date_i3,date,yyyy-mm-dd,Date on which the 'ДГ' payment for the third installment was made (or is scheduled). Blank if event did not contribute to this installment.
+BD,ПД — сума (В3),preliminary_contract_amount_i3,number,EUR,Amount contributed by the 'ПД' event to the third installment. Preliminary contract signing payment. Blank = this event did not contribute to this installment.
+BE,ПД — дата (В3),preliminary_contract_date_i3,date,yyyy-mm-dd,Date on which the 'ПД' payment for the third installment was made (or is scheduled). Blank if event did not contribute to this installment.
+BF,СМР Банка — сума (В3),construction_bank_amount_i3,number,EUR,Amount contributed by the 'СМР Банка' event to the third installment. Construction milestone payment funded via bank loan. Blank = this event did not contribute to this installment.
+BG,СМР Банка — дата (В3),construction_bank_date_i3,date,yyyy-mm-dd,Date on which the 'СМР Банка' payment for the third installment was made (or is scheduled). Blank if event did not contribute to this installment.
+BH,СМР Кеш — сума (В3),construction_cash_amount_i3,number,EUR,Amount contributed by the 'СМР Кеш' event to the third installment. Construction milestone payment paid in cash. Blank = this event did not contribute to this installment.
+BI,СМР Кеш — дата (В3),construction_cash_date_i3,date,yyyy-mm-dd,Date on which the 'СМР Кеш' payment for the third installment was made (or is scheduled). Blank if event did not contribute to this installment.
+BJ,Доплащане 1 — сума (В3),additional_payment_1_amount_i3,number,EUR,Amount contributed by the 'Доплащане 1' event to the third installment. First supplemental/additional payment. Blank = this event did not contribute to this installment.
+BK,Доплащане 1 — дата (В3),additional_payment_1_date_i3,date,yyyy-mm-dd,Date on which the 'Доплащане 1' payment for the third installment was made (or is scheduled). Blank if event did not contribute to this installment.
+BL,Доплащане 2 — сума (В3),additional_payment_2_amount_i3,number,EUR,Amount contributed by the 'Доплащане 2' event to the third installment. Second supplemental/additional payment. Blank = this event did not contribute to this installment.
+BM,Доплащане 2 — дата (В3),additional_payment_2_date_i3,date,yyyy-mm-dd,Date on which the 'Доплащане 2' payment for the third installment was made (or is scheduled). Blank if event did not contribute to this installment.
+BN,Нотариален акт — сума (В3),notary_deed_amount_i3,number,EUR,Amount contributed by the 'Нотариален акт' event to the third installment. Payment due at notarization (transfer of title). Blank = this event did not contribute to this installment.
+BO,Нотариален акт — дата (В3),notary_deed_date_i3,date,yyyy-mm-dd,Date on which the 'Нотариален акт' payment for the third installment was made (or is scheduled). Blank if event did not contribute to this installment.
+BP,Договор за заем — сума (В3),loan_agreement_amount_i3,number,EUR,"Amount contributed by the 'Договор за заем' event to the third installment. Payment tied to a loan-agreement event (rare, ~20 contracts). Blank = this event did not contribute to this installment."
+BQ,Договор за заем — дата (В3),loan_agreement_date_i3,date,yyyy-mm-dd,Date on which the 'Договор за заем' payment for the third installment was made (or is scheduled). Blank if event did not contribute to this installment.
+BR,✓ Сума събития (В3),installment_3_computed_sum,number (formula),EUR,Live SUM of the 8 event amounts in this installment block. Used for validation; should equal installment_3_paid.
+BS,Δ (В3),installment_3_delta,number (formula),EUR,Validation delta = installment_3_computed_sum − installment_3_paid. Should be 0; non-zero values flagged in red indicate a data inconsistency.
+BT,Четвърта вноска,installment_4_due,number,EUR,Total amount due for the fourth installment of this contract.
+BU,Четвърта вноска платено,installment_4_paid,number,EUR,Total amount paid toward the fourth installment. Equals the sum of the 8 event-amount columns in this block.
+BV,Четвърта вноска остава,installment_4_remaining,number,EUR,Remaining unpaid amount for the fourth installment = installment_4_due − installment_4_paid.
+BW,ДГ — сума (В4),down_payment_amount_i4,number,EUR,Amount contributed by the 'ДГ' event to the fourth installment. Initial down payment (deposit) event. Blank = this event did not contribute to this installment.
+BX,ДГ — дата (В4),down_payment_date_i4,date,yyyy-mm-dd,Date on which the 'ДГ' payment for the fourth installment was made (or is scheduled). Blank if event did not contribute to this installment.
+BY,ПД — сума (В4),preliminary_contract_amount_i4,number,EUR,Amount contributed by the 'ПД' event to the fourth installment. Preliminary contract signing payment. Blank = this event did not contribute to this installment.
+BZ,ПД — дата (В4),preliminary_contract_date_i4,date,yyyy-mm-dd,Date on which the 'ПД' payment for the fourth installment was made (or is scheduled). Blank if event did not contribute to this installment.
+CA,СМР Банка — сума (В4),construction_bank_amount_i4,number,EUR,Amount contributed by the 'СМР Банка' event to the fourth installment. Construction milestone payment funded via bank loan. Blank = this event did not contribute to this installment.
+CB,СМР Банка — дата (В4),construction_bank_date_i4,date,yyyy-mm-dd,Date on which the 'СМР Банка' payment for the fourth installment was made (or is scheduled). Blank if event did not contribute to this installment.
+CC,СМР Кеш — сума (В4),construction_cash_amount_i4,number,EUR,Amount contributed by the 'СМР Кеш' event to the fourth installment. Construction milestone payment paid in cash. Blank = this event did not contribute to this installment.
+CD,СМР Кеш — дата (В4),construction_cash_date_i4,date,yyyy-mm-dd,Date on which the 'СМР Кеш' payment for the fourth installment was made (or is scheduled). Blank if event did not contribute to this installment.
+CE,Доплащане 1 — сума (В4),additional_payment_1_amount_i4,number,EUR,Amount contributed by the 'Доплащане 1' event to the fourth installment. First supplemental/additional payment. Blank = this event did not contribute to this installment.
+CF,Доплащане 1 — дата (В4),additional_payment_1_date_i4,date,yyyy-mm-dd,Date on which the 'Доплащане 1' payment for the fourth installment was made (or is scheduled). Blank if event did not contribute to this installment.
+CG,Доплащане 2 — сума (В4),additional_payment_2_amount_i4,number,EUR,Amount contributed by the 'Доплащане 2' event to the fourth installment. Second supplemental/additional payment. Blank = this event did not contribute to this installment.
+CH,Доплащане 2 — дата (В4),additional_payment_2_date_i4,date,yyyy-mm-dd,Date on which the 'Доплащане 2' payment for the fourth installment was made (or is scheduled). Blank if event did not contribute to this installment.
+CI,Нотариален акт — сума (В4),notary_deed_amount_i4,number,EUR,Amount contributed by the 'Нотариален акт' event to the fourth installment. Payment due at notarization (transfer of title). Blank = this event did not contribute to this installment.
+CJ,Нотариален акт — дата (В4),notary_deed_date_i4,date,yyyy-mm-dd,Date on which the 'Нотариален акт' payment for the fourth installment was made (or is scheduled). Blank if event did not contribute to this installment.
+CK,Договор за заем — сума (В4),loan_agreement_amount_i4,number,EUR,"Amount contributed by the 'Договор за заем' event to the fourth installment. Payment tied to a loan-agreement event (rare, ~20 contracts). Blank = this event did not contribute to this installment."
+CL,Договор за заем — дата (В4),loan_agreement_date_i4,date,yyyy-mm-dd,Date on which the 'Договор за заем' payment for the fourth installment was made (or is scheduled). Blank if event did not contribute to this installment.
+CM,✓ Сума събития (В4),installment_4_computed_sum,number (formula),EUR,Live SUM of the 8 event amounts in this installment block. Used for validation; should equal installment_4_paid.
+CN,Δ (В4),installment_4_delta,number (formula),EUR,Validation delta = installment_4_computed_sum − installment_4_paid. Should be 0; non-zero values flagged in red indicate a data inconsistency.
+CO,Остава общо,total_remaining,number,EUR,Total remaining unpaid amount across all 4 installments for the contract.
+,,,,,
+,,,,,
+Worked example (row 2 of Contracts),,,,,
+"Contract: 'Людмил Икономов-Царевец-ап.27, вх.А и гараж 18 и гараж 19'",,,,,
+"• Total due (Обща дължима сума) = €148,590.00, no bank credit.",,,,,
+"• Първа вноска due = €148,590.00, paid = €74,177.68, remaining = €74,412.32.",,,,,
+• Событие breakdown for Вноска 1:,,,,,
+"    ПД (preliminary contract) — €39,407.18 paid on 2024-11-22",,,,,
+"    СМР Кеш (construction cash) — €34,770.50 paid on 2024-11-22",,,,,
+    (All other events blank for this installment.),,,,,
+"• Validation: 39,407.18 + 34,770.50 = 74,177.68 → matches 'Първа вноска платено' exactly → Δ (В1) = 0.",,,,,
+,,,,,
+Interpretation rules for LLMs:,,,,,
+1. A blank event-amount cell means that event did not contribute to that installment — NOT zero and NOT missing data.,,,,,
+2. 'installment_N_paid' is the source-of-truth summary. The event columns are the breakdown; they always sum to it (Δ = 0 across all 872 contracts).,,,,,
+3. Not all 8 events appear in every contract. Typical contracts use 5–7 events; 'Договор за заем' appears in only ~20 contracts.,,,,,
+4. An event can contribute to multiple installments (e.g. СМР Кеш might have amounts in both В1 and В2 columns).,,,,,
+"5. Dates are Excel serial dates, formatted yyyy-mm-dd. All amounts are EUR.",,,,,

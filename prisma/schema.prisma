@@ -1,0 +1,1345 @@
+// vminvest ERP — Prisma schema
+// Auth lives in Supabase's `auth` schema and is referenced by user_id (uuid).
+// Business data lives in `public`. Absence module owns the `absence` schema.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["public", "absence"]
+}
+
+// ─── public.* ───────────────────────────────────────────────────────────────
+
+enum Role {
+  admin
+  manager
+  user
+
+  @@schema("public")
+}
+
+enum DigestMode {
+  instant
+  daily_9am
+
+  @@schema("public")
+}
+
+// Profile row mirrors auth.users 1:1; created via trigger on auth user creation.
+// All FKs from business tables point at Profile.id (= auth.users.id).
+model Profile {
+  id            String     @id @db.Uuid
+  email         String     @unique
+  fullName      String     @map("full_name")
+  role          Role       @default(user)
+  active        Boolean    @default(true)
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deactivatedAt DateTime?  @map("deactivated_at") @db.Timestamptz(6)
+
+  // Org chart: who this person reports to (for absence approvals etc).
+  // Optional because top-of-chart people (CEO) report to nobody internally.
+  managerId String?  @map("manager_id") @db.Uuid
+  manager   Profile? @relation("ProfileManager", fields: [managerId], references: [id])
+  reports   Profile[] @relation("ProfileManager")
+
+  // Absence-module fields. Defaults match Bulgarian Labor Code (20 paid days,
+  // up to 10 carryover). Admin can override per-employee.
+  hireDate       DateTime?  @map("hire_date") @db.Date
+  annualDays     Decimal    @default(20) @map("annual_days") @db.Decimal(4, 1)
+  carryoverDays  Decimal    @default(0)  @map("carryover_days") @db.Decimal(4, 1)
+  carryoverYear  Int?       @map("carryover_year")
+  digestMode     DigestMode @default(instant) @map("digest_mode")
+
+  // Relations into other modules.
+  invitesSent        Invite[]              @relation("InviteSentBy")
+  auditEvents        AuditEvent[]
+  failedAttempts     FailedLoginAttempt[]
+  absenceRequests    AbsenceRequest[]      @relation("AbsenceEmployee")
+  pendingApprovals   AbsenceRequest[]      @relation("AbsenceApprover")
+  decidedRequests    AbsenceRequest[]      @relation("AbsenceDecider")
+  uploadedCalendars  CalendarYear[]
+  notifications      AbsenceNotification[]
+  resolvedAnomalies  AnomalyFlag[]
+  ownedContacts      Contact[]             @relation("ContactOwner")
+  createdContacts    Contact[]             @relation("ContactCreatedBy")
+  activityNotes      ActivityNote[]        @relation("ActivityNoteAuthor")
+  activityMentions   ActivityNoteMention[] @relation("ActivityNoteMentionTarget")
+  ownedLeads         Lead[]                @relation("LeadOwner")
+  createdLeads       Lead[]                @relation("LeadCreatedBy")
+  deletedLeads       Lead[]                @relation("LeadDeletedBy")
+  stoppedLeadTimers  Lead[]                @relation("LeadTimerStopper")
+  createdMeetings    Meeting[]             @relation("MeetingCreatedBy")
+  happenedMeetings   Meeting[]             @relation("MeetingHappenedBy")
+  cancelledMeetings  Meeting[]             @relation("MeetingCancelledBy")
+  meetingAssignments MeetingAssignee[]
+  createdProperties    Property[]               @relation("PropertyCreatedBy")
+  updatedProperties    Property[]               @relation("PropertyUpdatedBy")
+  deletedProperties    Property[]               @relation("PropertyDeletedBy")
+  authoredStatusEvents PropertyStatusHistory[]  @relation("PropertyStatusAuthor")
+  createdContracts     Contract[]               @relation("ContractCreatedBy")
+  updatedContracts     Contract[]               @relation("ContractUpdatedBy")
+  deletedContracts     Contract[]               @relation("ContractDeletedBy")
+  // Contracts where this profile is the deal consultant ("Консултант на
+  // сделката"). Backs the future "My Work" view that needs to filter
+  // contracts by who's assigned to them.
+  salesContracts       Contract[]               @relation("ContractSalesperson")
+  uploadedAttachments  ContractAttachment[]     @relation("ContractAttachmentUploadedBy")
+  ownedTasks           Task[]                   @relation("TaskOwner")
+  createdTasks         Task[]                   @relation("TaskCreatedBy")
+  uploadedInvoices     Invoice[]                @relation("InvoiceUploadedBy")
+  paidInvoices         Invoice[]                @relation("InvoicePaidBy")
+  // Renovations — owns the project (manager), authors tasks, decides status.
+  // See `specs/renovations.md` §3.1 + §7.
+  managedRenovations   Renovation[]             @relation("RenovationManager")
+  createdRenovations   Renovation[]             @relation("RenovationCreatedBy")
+  deletedRenovations   Renovation[]             @relation("RenovationDeletedBy")
+  renovationStatusEvents RenovationStatusHistory[] @relation("RenovationStatusAuthor")
+  // Renovations catalog (admin-managed) — see `specs/renovations.md` §3.6–§3.7.
+  createdTeams              Team[]               @relation("TeamCreatedBy")
+  deletedTeams              Team[]               @relation("TeamDeletedBy")
+  createdActivityTemplates  ActivityTemplate[]   @relation("ActivityTemplateCreatedBy")
+  deletedActivityTemplates  ActivityTemplate[]   @relation("ActivityTemplateDeletedBy")
+  createdRenovationActivities RenovationActivity[] @relation("RenovationActivityCreatedBy")
+
+  @@map("profiles")
+  @@schema("public")
+}
+
+// Pending invites issued by an admin. Redeemed when the invitee sets their password.
+model Invite {
+  id          String    @id @default(uuid()) @db.Uuid
+  email       String
+  role        Role
+  invitedById String    @map("invited_by_id") @db.Uuid
+  invitedBy   Profile   @relation("InviteSentBy", fields: [invitedById], references: [id])
+  token       String    @unique
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  redeemedAt  DateTime? @map("redeemed_at") @db.Timestamptz(6)
+  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([email])
+  @@index([expiresAt])
+  @@map("invites")
+  @@schema("public")
+}
+
+// Append-only audit log shared across modules. Action namespace distinguishes
+// origin: `auth.*`, `absence.*`, `contacts.*`, etc.
+model AuditEvent {
+  id         BigInt   @id @default(autoincrement())
+  actorId    String?  @map("actor_id") @db.Uuid
+  actor      Profile? @relation(fields: [actorId], references: [id])
+  action     String
+  targetType String?  @map("target_type")
+  targetId   String?  @map("target_id")
+  payload    Json?
+  before     Json?
+  after      Json?
+  ip         String?  @db.Inet
+  userAgent  String?  @map("user_agent")
+  at         DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([actorId, at])
+  @@index([action, at])
+  @@map("audit_events")
+  @@schema("public")
+}
+
+// Per-email failed login tracking for the 5-fail / 15-min lockout rule.
+model FailedLoginAttempt {
+  id        BigInt   @id @default(autoincrement())
+  email     String
+  profileId String?  @map("profile_id") @db.Uuid
+  profile   Profile? @relation(fields: [profileId], references: [id])
+  at        DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([email, at])
+  @@map("failed_login_attempts")
+  @@schema("public")
+}
+
+// Root of the business domain chain. Every lead/meeting/contract/payment hangs
+// off a Contact. Per specs/contacts.md: `type` + `buildings` are stored as
+// strings rather than enums so admins can later manage the lists without a
+// migration. ЕГН/ЕИК share the `egn` column (9 or 10 digit).
+model Contact {
+  id            String   @id @default(uuid()) @db.Uuid
+  fullName      String   @map("full_name")
+  type          String
+  phone         String?
+  email         String?
+  birthDate     DateTime? @map("birth_date") @db.Date
+  egn           String?
+  address       String?
+  ownerId       String?  @map("owner_id") @db.Uuid
+  owner         Profile? @relation("ContactOwner", fields: [ownerId], references: [id])
+  // Single-building FK — source of truth. Populated from legacy `buildings[]`
+  // during the Properties migration; the array column was dropped in
+  // Migration B once the seed landed (see specs/properties.md §3.3.2).
+  buildingId    String?  @map("building_id") @db.Uuid
+  building      Building? @relation(fields: [buildingId], references: [id])
+  properties    String?
+  contractLabel String?  @map("contract_label")
+  notes         String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdById   String?  @map("created_by_id") @db.Uuid
+  createdBy     Profile? @relation("ContactCreatedBy", fields: [createdById], references: [id])
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // ActivityNote rows are polymorphic on (targetType, targetId) so the
+  // back-relation is queried via raw filter in the activity-feed module
+  // rather than via a Prisma relation here. See
+  // `specs/_foundations/activity-feed.md` §4.1 for the trade-off.
+  leads          Lead[]
+  ownedProperties Property[] @relation("PropertyOwner")
+  contracts       Contract[] @relation("ContractBuyer")
+  // Renovations this contact requested (Property.owner who called in
+  // asking for work). Nullable on the renovation side for the future
+  // pre-handover path (B) where there's no external client.
+  requestedRenovations Renovation[] @relation("RenovationRequestedBy")
+
+  @@index([fullName])
+  @@index([email])
+  @@index([phone])
+  @@index([egn])
+  @@index([type])
+  @@index([createdAt])
+  @@index([buildingId])
+  @@map("contacts")
+  @@schema("public")
+}
+
+// ─── Activity feed (polymorphic notes) ─────────────────────────────────────
+//
+// Per `specs/_foundations/activity-feed.md`: the per-record narrative surface
+// on every major detail page. Generalises the legacy `ContactNote` model into
+// a polymorphic table keyed by `(targetType, targetId)` so one model serves
+// Contact, Lead, Meeting, Contract, Property, Renovation, Invoice, Task.
+//
+// Trade-off: no FK on `targetId` — the application-side server action checks
+// that the target record exists when a note is posted. Same trade-off
+// `AuditEvent` already makes successfully. Orphans after a hard-delete are
+// tolerable (soft-delete is the convention everywhere else).
+//
+// Phase 1.A scope: schema + Contacts wiring + ContactNote migration.
+// `@mention` parsing + Resend notification + the `ActivityNoteMention` row
+// emission land in a follow-up round; the join table is shipped now so the
+// schema doesn't need a migration when mentions land.
+
+model ActivityNote {
+  id         String                @id @default(uuid()) @db.Uuid
+  targetType String                @map("target_type")
+  targetId   String                @map("target_id") @db.Uuid
+  authorId   String                @map("author_id") @db.Uuid
+  author     Profile               @relation("ActivityNoteAuthor", fields: [authorId], references: [id])
+  body       String
+  parentId   String?               @map("parent_id") @db.Uuid
+  parent     ActivityNote?         @relation("ActivityNoteReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies    ActivityNote[]        @relation("ActivityNoteReplies")
+  mentions   ActivityNoteMention[]
+  createdAt  DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  editedAt   DateTime?             @map("edited_at") @db.Timestamptz(6)
+  deletedAt  DateTime?             @map("deleted_at") @db.Timestamptz(6)
+
+  @@index([targetType, targetId, createdAt])
+  @@index([parentId])
+  @@index([authorId, createdAt])
+  @@map("activity_notes")
+  @@schema("public")
+}
+
+// One row per (note, mentioned profile). Drives the immediate-email
+// notification (when mentions land) + the future "mentions about me" inbox.
+// `notifiedAt` is null until the Resend email actually fires; a retry job
+// picks up null rows. Unique constraint on (noteId, mentionedProfileId)
+// prevents double-emails when an edit re-saves the same mention.
+
+model ActivityNoteMention {
+  id                 String       @id @default(uuid()) @db.Uuid
+  noteId             String       @map("note_id") @db.Uuid
+  note               ActivityNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  mentionedProfileId String       @map("mentioned_profile_id") @db.Uuid
+  mentionedProfile   Profile      @relation("ActivityNoteMentionTarget", fields: [mentionedProfileId], references: [id])
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  notifiedAt         DateTime?    @map("notified_at") @db.Timestamptz(6)
+  // Stamped when the mentioned user visits their inbox at `/mentions`. Null
+  // = unread (shown in the top-nav badge). Phase 1: visiting the inbox
+  // marks ALL of the current user's pending mentions as read in one batch
+  // — no per-row click handling. See `specs/_foundations/activity-feed.md`
+  // §15 ("mentions about me inbox") for the read-state design.
+  seenAt             DateTime?    @map("seen_at") @db.Timestamptz(6)
+
+  @@unique([noteId, mentionedProfileId])
+  @@index([mentionedProfileId, createdAt])
+  @@map("activity_note_mentions")
+  @@schema("public")
+}
+
+// ─── Leads ─────────────────────────────────────────────────────────────────
+
+enum LeadSource {
+  manual
+  email_form
+  email_unparsed
+  phone
+
+  @@schema("public")
+}
+
+enum LeadStatus {
+  new
+  in_progress
+  converted
+  no_progress
+
+  @@schema("public")
+}
+
+enum MatchConfidence {
+  high
+  medium
+  low
+
+  @@schema("public")
+}
+
+// Sales opportunity attached to a Contact. See specs/leads.md for the full spec.
+// Phase 1 covers manual creation + list/profile/edit/soft-delete. Email fields
+// and timer fields are nullable because they only apply to the Phase 2 email
+// ingestion flow.
+model Lead {
+  id           String     @id @default(uuid()) @db.Uuid
+  contactId    String     @map("contact_id") @db.Uuid
+  contact      Contact    @relation(fields: [contactId], references: [id])
+  source       LeadSource
+  status       LeadStatus @default(new)
+  ownerId      String?    @map("owner_id") @db.Uuid
+  owner        Profile?   @relation("LeadOwner", fields: [ownerId], references: [id])
+  properties   String[]   @default([])
+  message      String?
+  createdById  String?    @map("created_by_id") @db.Uuid
+  createdBy    Profile?   @relation("LeadCreatedBy", fields: [createdById], references: [id])
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Soft delete
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+  deletedById  String?   @map("deleted_by_id") @db.Uuid
+  deletedBy    Profile?  @relation("LeadDeletedBy", fields: [deletedById], references: [id])
+  deleteReason String?   @map("delete_reason")
+
+  // Email ingestion (Phase 2) — all nullable, populated only by the parser.
+  emailReceivedAt DateTime? @map("email_received_at") @db.Timestamptz(6)
+  emailFrom       String?   @map("email_from")
+  emailSubject    String?   @map("email_subject")
+  emailMessageId  String?   @unique @map("email_message_id")
+  rawEmailBody    String?   @map("raw_email_body")
+  parseError      String?   @map("parse_error")
+
+  // Contact match metadata (email leads only)
+  matchConfidence MatchConfidence? @map("match_confidence")
+  matchFlags      String[]         @default([]) @map("match_flags")
+
+  // Response timer (email leads only)
+  timerStartedAt   DateTime? @map("timer_started_at") @db.Timestamptz(6)
+  timerStoppedAt   DateTime? @map("timer_stopped_at") @db.Timestamptz(6)
+  timerStoppedById String?   @map("timer_stopped_by_id") @db.Uuid
+  timerStoppedBy   Profile?  @relation("LeadTimerStopper", fields: [timerStoppedById], references: [id])
+  timerStopComment String?   @map("timer_stop_comment")
+  timerEscalatedAt DateTime? @map("timer_escalated_at") @db.Timestamptz(6)
+
+  // Conversion to Contract — set automatically by the Contracts module.
+  convertedContractId String? @map("converted_contract_id") @db.Uuid
+
+  meetings Meeting[]
+
+  @@index([contactId])
+  @@index([status, ownerId])
+  @@index([source, ownerId])
+  @@index([createdAt])
+  @@index([deletedAt])
+  @@index([timerStartedAt, timerStoppedAt])
+  @@map("leads")
+  @@schema("public")
+}
+
+// ─── Meetings ──────────────────────────────────────────────────────────────
+
+enum MeetingType {
+  office_presentation
+  onsite_presentation
+  contract_signing
+  follow_up
+  other
+
+  @@schema("public")
+}
+
+enum MeetingStatus {
+  upcoming
+  happened
+  cancelled
+
+  @@schema("public")
+}
+
+// Client-facing meetings attached to a Lead. See specs/meetings.md.
+// `status = cancelled` is soft delete; the row stays in the DB so it can be
+// restored within 30 days by assignees/managers and indefinitely by admins.
+model Meeting {
+  id              String        @id @default(uuid()) @db.Uuid
+  leadId          String        @map("lead_id") @db.Uuid
+  lead            Lead          @relation(fields: [leadId], references: [id])
+  startsAt        DateTime      @map("starts_at") @db.Timestamptz(6)
+  durationMinutes Int           @default(60) @map("duration_minutes")
+  type            MeetingType
+  location        String?
+  notes           String?
+  status          MeetingStatus @default(upcoming)
+
+  happenedOutcome String?   @map("happened_outcome")
+  happenedAt      DateTime? @map("happened_at") @db.Timestamptz(6)
+  happenedById    String?   @map("happened_by_id") @db.Uuid
+  happenedBy      Profile?  @relation("MeetingHappenedBy", fields: [happenedById], references: [id])
+
+  cancelReason  String?   @map("cancel_reason")
+  cancelledAt   DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  cancelledById String?   @map("cancelled_by_id") @db.Uuid
+  cancelledBy   Profile?  @relation("MeetingCancelledBy", fields: [cancelledById], references: [id])
+
+  createdById String   @map("created_by_id") @db.Uuid
+  createdBy   Profile  @relation("MeetingCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  assignees MeetingAssignee[]
+
+  @@index([leadId])
+  @@index([startsAt])
+  @@index([status, startsAt])
+  @@map("meetings")
+  @@schema("public")
+}
+
+// Many-to-many between meetings and profiles. Creator is auto-inserted at
+// meeting creation time; additional assignees can be added from the form.
+model MeetingAssignee {
+  meetingId String   @map("meeting_id") @db.Uuid
+  meeting   Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  profileId String   @map("profile_id") @db.Uuid
+  profile   Profile  @relation(fields: [profileId], references: [id])
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([meetingId, profileId])
+  @@index([profileId])
+  @@map("meeting_assignees")
+  @@schema("public")
+}
+
+// ─── Properties ────────────────────────────────────────────────────────────
+
+// Physical building with a curated display name. Seeded from the distinct
+// `Сграда` values in `files/Properties/all-properties.csv`. Admins can add /
+// rename / deactivate from `/admin/buildings`. `complex` is a free-text
+// grouping label — see specs/properties.md §3.3.1 for the seeded values.
+model Building {
+  id          String    @id @default(uuid()) @db.Uuid
+  storageName String    @unique @map("storage_name")
+  displayName String    @map("display_name")
+  complex     String?
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  properties Property[]
+  contacts   Contact[]
+
+  @@index([complex])
+  @@index([active])
+  @@map("buildings")
+  @@schema("public")
+}
+
+// A single property unit (apartment, garage, parking space, storage, etc).
+// `status` and `type` are stored as free strings rather than enums so admins
+// can manage the lists without a migration. Validation against the canonical
+// Bulgarian strings lives in lib/properties/constants.ts.
+//
+// `ownerId` + `contractId` stay null in Phase 1 — they are populated by the
+// Contracts module in Phase 2. `contractId` has no FK yet because the
+// Contracts table does not exist.
+model Property {
+  id String @id @default(uuid()) @db.Uuid
+
+  buildingId String   @map("building_id") @db.Uuid
+  building   Building @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+
+  name        String
+  status      String
+  type        String
+  entrance    String?
+  floor       Int?
+  description String?
+  // Canonical sellers list for the property — usually 0 or 1 entries; can
+  // hold multiple in co-ownership cases (e.g. a deed with two legal
+  // entities). Free-text labels, deduplicated within the array. The form
+  // input is a chip/tag picker that autocompletes from existing values
+  // across all properties (no managed Seller entity in Phase 1).
+  // Replaced the legacy `seller String?` column in the round that introduced
+  // multi-seller support — see specs/decisions.md 12.05.2026 entry for the
+  // full migration story.
+  sellers     String[] @default([])
+
+  expectedPriceEur            Decimal? @map("expected_price_eur")              @db.Decimal(12, 2)
+  priceEur                    Decimal? @map("price_eur")                       @db.Decimal(12, 2)
+  yardTerracePriceEur         Decimal? @map("yard_terrace_price_eur")          @db.Decimal(12, 2)
+  priceBgnOriginal            Decimal? @map("price_bgn_original")              @db.Decimal(12, 2)
+  expectedPriceBgnOriginal    Decimal? @map("expected_price_bgn_original")     @db.Decimal(12, 2)
+  yardTerracePriceBgnOriginal Decimal? @map("yard_terrace_price_bgn_original") @db.Decimal(12, 2)
+
+  totalAreaM2    Decimal? @map("total_area_m2")    @db.Decimal(8, 4)
+  commonPartsM2  Decimal? @map("common_parts_m2")  @db.Decimal(8, 4)
+  netAreaM2      Decimal? @map("net_area_m2")      @db.Decimal(8, 2)
+  idealPartsCoef Decimal? @map("ideal_parts_coef") @db.Decimal(8, 4)
+  bathroomCount  Int?     @map("bathroom_count")
+  yardM2         Decimal? @map("yard_m2")          @db.Decimal(8, 2)
+  terraceM2      Decimal? @map("terrace_m2")       @db.Decimal(8, 2)
+  landM2         Decimal? @map("land_m2")          @db.Decimal(8, 4)
+  // (10, 6) instead of (8, 6) so one outlier row (ВП_МТМ / ПАРКОМЯСТО Т37
+  // with landPct = 203 — likely a CSV data error) doesn't bomb the import.
+  // Display still uses 4 d.p. per specs/properties.md §3.1.
+  landPct        Decimal? @map("land_pct")         @db.Decimal(10, 6)
+  yardPct        Decimal? @map("yard_pct")         @db.Decimal(10, 6)
+
+  // Legacy free-text fields from the CSV. Once a real contract/owner is wired
+  // up via `contractId`/`ownerId`, the UI makes these read-only.
+  contractLabel String?  @map("contract_label")
+  buyerLabel    String?  @map("buyer_label")
+  hasCredit     Boolean? @map("has_credit")
+
+  // Phase 2 — populated by the Contracts module.
+  ownerId    String?  @map("owner_id")    @db.Uuid
+  owner      Contact? @relation("PropertyOwner", fields: [ownerId], references: [id])
+  contractId String?  @map("contract_id") @db.Uuid
+
+  // Soft delete — mirrors the Lead pattern.
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+  deletedById  String?   @map("deleted_by_id") @db.Uuid
+  deletedBy    Profile?  @relation("PropertyDeletedBy", fields: [deletedById], references: [id])
+  deleteReason String?   @map("delete_reason")
+
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdBy   Profile? @relation("PropertyCreatedBy", fields: [createdById], references: [id])
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedById String?  @map("updated_by_id") @db.Uuid
+  updatedBy   Profile? @relation("PropertyUpdatedBy", fields: [updatedById], references: [id])
+
+  statusHistory PropertyStatusHistory[]
+  contracts     ContractProperty[]
+  renovations   Renovation[]
+
+  @@unique([buildingId, name], name: "property_building_name_unique")
+  @@index([buildingId])
+  @@index([status])
+  @@index([type])
+  @@index([ownerId])
+  @@index([deletedAt])
+  @@index([createdAt])
+  @@map("properties")
+  @@schema("public")
+}
+
+// Append-only log of every status change on a Property. The initial migration
+// seed writes one row per property with fromStatus=null and note="Мигриран от
+// CSV". Contract-driven changes (Phase 2) tag `contractId`.
+model PropertyStatusHistory {
+  id         String   @id @default(uuid()) @db.Uuid
+  propertyId String   @map("property_id") @db.Uuid
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  fromStatus String?  @map("from_status")
+  toStatus   String   @map("to_status")
+  note       String?
+  contractId String?  @map("contract_id") @db.Uuid
+  authorId   String?  @map("author_id") @db.Uuid
+  author     Profile? @relation("PropertyStatusAuthor", fields: [authorId], references: [id])
+  at         DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([propertyId, at])
+  @@map("property_status_history")
+  @@schema("public")
+}
+
+// ─── Contracts ─────────────────────────────────────────────────────────────
+
+// Real-estate purchase contract. One contract per (buyer, set-of-units).
+// Each contract has up to 4 `ContractPayment` milestones (Вноска 1..4,
+// mapping to "Подписване / Акт 14 / Акт 15 / Акт 16"), and each payment
+// can be satisfied by 0-3 `ContractInstallment` events (triggered by the
+// 8 event types ДГ / ПД / СМР Банка / …).
+//
+// `contactId` is nullable because the 872 imported rows reference buyers
+// by free-text name; we match to `Contact.fullName` best-effort on import
+// and leave `contactId = null` when no match is found. `buyerFullName`
+// stays as the authoritative free text for those cases.
+//
+// Seeded from `files/Contracts/Contracts.xlsx` — see scripts/import-contracts.ts.
+// The Phase-2 "Create contract" workflow will add `templateId`, `templateVersion`,
+// `blockValues`, and `attachments`; those are deliberately absent now.
+model Contract {
+  id                String   @id @default(uuid()) @db.Uuid
+
+  // Identity
+  title             String   // "Людмил Икономов-Царевец-ап.27, вх.А и гараж 18 и гараж 19"
+  buyerFullName     String   @map("buyer_full_name")
+  contactId         String?  @map("contact_id") @db.Uuid
+  contact           Contact? @relation("ContractBuyer", fields: [contactId], references: [id])
+
+  // Context — "Консултант на сделката" (salesperson). The legacy free-text
+  // `salesperson` column stays populated for backwards-compatibility with
+  // CSV-imported rows whose values are loose strings (sometimes nicknames,
+  // sometimes a surname only). New manual create/edit always picks a real
+  // `Profile` via the user picker, writes the FK to `salespersonId`, AND
+  // mirrors the chosen profile's fullName into the legacy column so the
+  // existing text-search filter on `/contracts` keeps working without
+  // dual-column logic. Future modules ("My Work" etc.) join via
+  // `salespersonId` for a reliable per-user view.
+  salesperson        String?
+  salespersonId      String?  @map("salesperson_id") @db.Uuid
+  salespersonProfile Profile? @relation("ContractSalesperson", fields: [salespersonId], references: [id])
+  building          String?  // free-text "Сграда"; denormalized for filtering
+  // Derived at import (and re-derived on edit) from the installments' track
+  // breakdown. Values: "SMR_KESH" | "SMR_BANKA" | "SMR_KOMBINIRAN" | "BEZ_SMR".
+  //   - only CASH installments → SMR_KESH
+  //   - only BANK installments with non-zero СМР Банка → SMR_BANKA
+  //   - both tracks populated → SMR_KOMBINIRAN
+  //   - neither track has СМР amounts → BEZ_SMR
+  contractType      String   @default("BEZ_SMR") @map("contract_type")
+  compositionStatus String?  @map("composition_status") // "А", "А+Г/ПМ", "А+ПМ"
+  preOrPost         String?  @map("pre_or_post") // "Преди" | "След" (completion)
+  usesCredit        Boolean  @default(false) @map("uses_credit")
+
+  // Money
+  totalDueEur       Decimal  @map("total_due_eur") @db.Decimal(12, 2)
+  totalPaidEur      Decimal  @default(0) @map("total_paid_eur") @db.Decimal(12, 2)
+  totalRemainingEur Decimal  @default(0) @map("total_remaining_eur") @db.Decimal(12, 2)
+
+  // Lifecycle
+  status            String   @default("signed") // "draft" | "signed" | "cancelled"
+  source            String   @default("manual") // "manual" | "imported"
+  signedAt          DateTime? @map("signed_at") @db.Timestamptz(6)
+  reminderDate      DateTime? @map("reminder_date") @db.Date // Дата напомняне
+
+  // Audit
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdById       String?  @map("created_by_id") @db.Uuid
+  createdBy         Profile? @relation("ContractCreatedBy", fields: [createdById], references: [id])
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedById       String?  @map("updated_by_id") @db.Uuid
+  updatedBy         Profile? @relation("ContractUpdatedBy", fields: [updatedById], references: [id])
+
+  // Soft-delete — admin-only per `specs/contracts.md` §138-139. Filtered
+  // out of every list/join via `deletedAt: null`. Reasons for soft (not
+  // hard) delete: contracts are legal records; we keep the row in case of
+  // an audit trail need.
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+  deletedById String?   @map("deleted_by_id") @db.Uuid
+  deletedBy   Profile?  @relation("ContractDeletedBy", fields: [deletedById], references: [id])
+
+  properties  ContractProperty[]
+  payments    ContractPayment[]
+  attachments ContractAttachment[]
+
+  @@index([contactId])
+  @@index([building])
+  @@index([status])
+  @@index([deletedAt])
+  @@index([createdAt])
+  @@index([salespersonId])
+  @@map("contracts")
+  @@schema("public")
+}
+
+// File attachments tied to a Contract. See specs/contracts.md §7.2 and the
+// cross-module pattern at specs/_foundations/ui-patterns-files.md. Files
+// live in Supabase Storage at `contracts/{contractId}/{attachmentId}-{name}`;
+// `storageKey` records the full path inside the bucket so the signing route
+// can recover it without recomputing.
+//
+// `type` distinguishes contract PDFs from tech-spec PDFs and a generic
+// "other" bucket for ad-hoc uploads. Phase 1 doesn't constrain who can pick
+// which type — uploads default to "other" and admins can re-classify later
+// (UI for that ships when versioning lands).
+//
+// `version` is reserved for the regeneration flow (specs/contracts.md §8.1).
+// Phase 1 always inserts version 1; the field is here so the eventual
+// version history doesn't require a migration.
+model ContractAttachment {
+  id           String   @id @default(uuid()) @db.Uuid
+  contractId   String   @map("contract_id") @db.Uuid
+  contract     Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  type         String   @default("other") // "contract_pdf" | "tech_spec_pdf" | "other"
+  fileName     String   @map("file_name")
+  storageKey   String   @map("storage_key") // e.g. "contracts/{id}/{aid}-{name}"
+  mimeType     String   @map("mime_type")
+  sizeBytes    Int      @map("size_bytes")
+  version      Int      @default(1)
+
+  uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  uploadedById String?  @map("uploaded_by_id") @db.Uuid
+  uploadedBy   Profile? @relation("ContractAttachmentUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([contractId])
+  @@index([uploadedAt])
+  @@map("contract_attachments")
+  @@schema("public")
+}
+
+// Many-to-many join between Contract and Property. One contract can cover
+// several properties (apartment + garage + parking), and one property can
+// in principle appear on multiple contracts (pre-sale → cancellation → resale).
+model ContractProperty {
+  contractId String   @map("contract_id") @db.Uuid
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  propertyId String   @map("property_id") @db.Uuid
+  property   Property @relation(fields: [propertyId], references: [id])
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([contractId, propertyId])
+  @@index([propertyId])
+  @@map("contract_properties")
+  @@schema("public")
+}
+
+// One of the 4 milestone payments (Вноска 1..4). Holds the scheduled total
+// and the running paid/remaining. Individual contributions live in
+// `ContractInstallment` rows beneath this.
+model ContractPayment {
+  id           String   @id @default(uuid()) @db.Uuid
+  contractId   String   @map("contract_id") @db.Uuid
+  contract     Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  number       Int      // 1..4 (Вноска 1 = Подписване, 2 = Акт 14, 3 = Акт 15, 4 = Акт 16)
+  dueEur       Decimal  @map("due_eur") @db.Decimal(12, 2)
+  paidEur      Decimal  @default(0) @map("paid_eur") @db.Decimal(12, 2)
+  remainingEur Decimal  @default(0) @map("remaining_eur") @db.Decimal(12, 2)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  installments ContractInstallment[]
+
+  @@unique([contractId, number])
+  @@index([contractId])
+  @@map("contract_payments")
+  @@schema("public")
+}
+
+// One actual payment contributing to a `ContractPayment` milestone. Each
+// installment belongs to one of two tracks (cash or bank). Cap enforced by
+// the UI/import: at most 3 installments per track per payment (6 total if
+// СМР Комбиниран, otherwise up to 3 on one track).
+//
+// Mapping at import from the CSV event columns:
+//   ДГ — сума / дата         → BANK installment (amount + date)
+//   ПД — сума / дата         → BANK installment (amount + date;
+//                                   date ALSO propagates to Contract.signedAt
+//                                   with priority over ДГ's date)
+//   СМР Банка — сума / дата  → BANK installment
+//   СМР Кеш — сума / дата    → CASH installment
+// Dropped (not imported): Доплащане 1, Доплащане 2, Нотариален акт, Договор за заем.
+model ContractInstallment {
+  id        String          @id @default(uuid()) @db.Uuid
+  paymentId String          @map("payment_id") @db.Uuid
+  payment   ContractPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  track     String          // "CASH" | "BANK"
+  amountEur Decimal         @map("amount_eur") @db.Decimal(12, 2)
+  paidAt    DateTime?       @map("paid_at") @db.Date
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([paymentId])
+  @@index([track])
+  @@map("contract_installments")
+  @@schema("public")
+}
+
+// ─── absence.* ──────────────────────────────────────────────────────────────
+
+enum AbsenceRequestStatus {
+  pending
+  approved
+  rejected
+  cancelled
+  cancel_pending
+
+  @@schema("absence")
+}
+
+enum CreatedVia {
+  self
+  admin_override
+
+  @@schema("absence")
+}
+
+enum AnomalyRule {
+  late_submission
+  oversize_request
+  pace_ahead
+  team_overlap
+
+  @@schema("absence")
+}
+
+enum AnomalySeverity {
+  info
+  warn
+  high
+
+  @@schema("absence")
+}
+
+// Tasks — standalone module per specs/tasks.md. No links to other entities
+// in v1 by design (the team treats tasks as personal/team todos, not as
+// CRM activity records). Single owner, optional due date, three-state
+// status. Permission model is open team-wide (anyone can create/assign/
+// edit/complete); admin-only delete.
+model Task {
+  id          String     @id @default(uuid()) @db.Uuid
+
+  title       String
+  description String?
+
+  status      TaskStatus @default(todo)
+  // DATE (no time-of-day) — tasks are scheduled at day granularity, like
+  // CalendarDay. Bulgarian business culture treats "due Tuesday" as the
+  // working unit, not "due Tuesday at 14:30".
+  dueDate     DateTime?  @map("due_date") @db.Date
+
+  // Owner is the assignee. Nullable so an unassigned task is representable
+  // (matches Contact.owner / Lead.owner conventions). Setting → done auto-
+  // stamps `completedAt` in the server action.
+  ownerId     String?    @map("owner_id") @db.Uuid
+  owner       Profile?   @relation("TaskOwner", fields: [ownerId], references: [id])
+
+  createdById String?    @map("created_by_id") @db.Uuid
+  createdBy   Profile?   @relation("TaskCreatedBy", fields: [createdById], references: [id])
+
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  completedAt DateTime?  @map("completed_at") @db.Timestamptz(6)
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("tasks")
+  @@schema("public")
+}
+
+enum TaskStatus {
+  todo
+  in_progress
+  done
+
+  @@schema("public")
+}
+
+// Admin-configured upload buckets shown as cards on /invoices.
+// Seeded with Офис / Строеж / Реновации / Архитектура; admin can add or
+// deactivate from /admin/invoice-sections. See specs/invoices.md §5.
+model InvoiceSection {
+  id        String   @id @default(uuid()) @db.Uuid
+  labelBg   String   @map("label_bg")
+  // Stable identifier — used in storage paths. Immutable after creation, so
+  // we never have to migrate already-uploaded PDFs when a label changes.
+  slug      String   @unique
+  sortOrder Int      @default(0) @map("sort_order")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  invoices Invoice[]
+
+  @@map("invoice_sections")
+  @@schema("public")
+}
+
+// Supplier invoice — header-level record. Currency is implicit EUR per
+// specs/invoices.md §3.1 (no `currency` column).
+model Invoice {
+  id        String         @id @default(uuid()) @db.Uuid
+  sectionId String         @map("section_id") @db.Uuid
+  section   InvoiceSection @relation(fields: [sectionId], references: [id])
+
+  uploadedById String   @map("uploaded_by_id") @db.Uuid
+  uploadedBy   Profile  @relation("InvoiceUploadedBy", fields: [uploadedById], references: [id])
+  uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+
+  // File pointer. Storage path is `invoices/<section-slug>/<yyyy-mm>/<uuid>.pdf`
+  // (see specs/invoices.md §4); the actual bytes live in Supabase Storage.
+  storagePath String @map("storage_path")
+  fileName    String @map("file_name")
+  fileSize    Int    @map("file_size")
+
+  // Parser confidence (0-100, min across extracted fields). Null when an admin
+  // creates a manual record without parsing (rare; covered for completeness).
+  parseConfidence   Int?    @map("parse_confidence")
+  parseReviewNeeded Boolean @default(false) @map("parse_review_needed")
+
+  // Vendor — free-text per §3.2. The normalized form (lowercase + collapsed
+  // whitespace) is what price-history joins use; keep both columns in sync
+  // on every write.
+  vendorName           String  @map("vendor_name")
+  vendorNameNormalized String  @map("vendor_name_normalized")
+  vendorVatNumber      String? @map("vendor_vat_number")
+
+  invoiceNumber String   @map("invoice_number")
+  invoiceDate   DateTime @map("invoice_date") @db.Date
+  dueDate       DateTime? @map("due_date") @db.Date
+
+  subtotal  Decimal @db.Decimal(12, 2)
+  vatAmount Decimal @map("vat_amount") @db.Decimal(12, 2)
+  total     Decimal @db.Decimal(12, 2)
+
+  status InvoiceStatus @default(pending)
+  // Stamped when status flips to paid; cleared if it ever flips back.
+  paidAt   DateTime? @map("paid_at") @db.Timestamptz(6)
+  paidById String?   @map("paid_by_id") @db.Uuid
+  paidBy   Profile?  @relation("InvoicePaidBy", fields: [paidById], references: [id])
+
+  notes String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  lineItems InvoiceLineItem[]
+
+  @@index([sectionId])
+  @@index([uploadedById])
+  @@index([status])
+  @@index([invoiceDate])
+  // Composite index that powers the price-history lookup (§9).
+  @@index([vendorNameNormalized, invoiceDate])
+  @@map("invoices")
+  @@schema("public")
+}
+
+enum InvoiceStatus {
+  pending
+  paid
+
+  @@schema("public")
+}
+
+model InvoiceLineItem {
+  id        String  @id @default(uuid()) @db.Uuid
+  invoiceId String  @map("invoice_id") @db.Uuid
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  rowNumber             Int     @map("row_number")
+  description           String
+  descriptionNormalized String  @map("description_normalized")
+  quantity              Decimal @db.Decimal(12, 4)
+  unit                  String
+  unitPrice             Decimal @map("unit_price") @db.Decimal(12, 4)
+  lineTotal             Decimal @map("line_total") @db.Decimal(12, 2)
+  vatRate               Decimal @map("vat_rate") @db.Decimal(5, 2)
+
+  // Anomaly state — populated by the detector on insert + on unitPrice/desc
+  // edits. `priceAnomalyPct` positive means the price is above baseline; null
+  // means no comparable prior invoice within the 30-day window (§9).
+  priceAnomalyPct          Decimal? @map("price_anomaly_pct") @db.Decimal(6, 2)
+  priceAnomalyRefInvoiceId String?  @map("price_anomaly_ref_invoice_id") @db.Uuid
+
+  @@index([invoiceId])
+  @@index([descriptionNormalized])
+  @@map("invoice_line_items")
+  @@schema("public")
+}
+
+// ─── Renovations ───────────────────────────────────────────────────────────
+//
+// Project module for post-handover renovation work on units already sold +
+// delivered. Phase 2 ships path A (owner-requested) primarily; the schema
+// is also ready for path B (pre-handover unit prep) via the nullable
+// `requestedByContactId`. See `specs/renovations.md` for the full design.
+//
+// Money tracking + predecessor task links + template-driven auto-seeding
+// are explicitly out of scope (§13 of the spec).
+
+enum RenovationStatus {
+  draft        // Чернова  — operator drafting scope, not communicated yet
+  quoted       // Оферта   — scope + timing communicated; awaiting acceptance
+  approved     // Одобрена — client accepted; work hasn't started
+  in_progress  // В процес — actualStartDate auto-stamped on transition
+  done         // Завършена — actualEndDate auto-stamped on transition
+  cancelled    // Отказана — terminal state distinct from done for reporting
+
+  @@schema("public")
+}
+
+enum RenovationTaskStatus {
+  planned
+  in_progress
+  done
+  cancelled
+
+  @@schema("public")
+}
+
+// Apartment-size taxonomy driving the renovation activity catalog's duration
+// columns. Values match `Property.type` strings the company already uses in
+// the screenshot referenced by `specs/decisions.md` 20.05.2026.
+// See `specs/renovations.md` §3.3.
+enum ApartmentSize {
+  studio       // Едностаен
+  two_room     // Двустаен
+  three_room   // Тристаен
+  four_room    // Четиристаен
+
+  @@schema("public")
+}
+
+model Renovation {
+  id                    String           @id @default(uuid()) @db.Uuid
+
+  // `title` and `type` columns dropped 20.05.2026 with the pivot to the
+  // template-driven activity model. Title is derived `Ремонт — <building>
+  // /<unit>` at render time; type is replaced by the apartmentSize +
+  // activity-template catalog. See decisions.md 20.05.2026.
+  status                RenovationStatus @default(draft)
+  description           String?
+
+  // Relations
+  propertyId            String           @map("property_id") @db.Uuid
+  property              Property         @relation(fields: [propertyId], references: [id])
+  // Path A: the buyer who asked. Null for path B (pre-handover prep).
+  requestedByContactId  String?          @map("requested_by_contact_id") @db.Uuid
+  requestedByContact    Contact?         @relation("RenovationRequestedBy", fields: [requestedByContactId], references: [id])
+  // Company employee responsible for execution. Defaults to the creator on
+  // insert; assignable to any active profile thereafter.
+  managerId             String?          @map("manager_id") @db.Uuid
+  manager               Profile?         @relation("RenovationManager", fields: [managerId], references: [id])
+
+  // Template-driven scoping (added 20.05.2026 with the pivot to the
+  // activity catalog — see `specs/renovations.md` §3.1 + §3.3 + §3.6).
+  // Nullable during the rollout window; the new create flow will write
+  // them every time. Existing rows from the free-task era may be null.
+  // `apartmentSize` is resolved from `Property.type` when it matches one
+  // of the four canonical labels; otherwise the create modal prompts.
+  // `bathroomCount` is defaulted from `Property.bathroomCount` (or 1).
+  apartmentSize         ApartmentSize?   @map("apartment_size")
+  bathroomCount         Int?             @map("bathroom_count")
+
+  // Schedule
+  plannedStartDate      DateTime?        @map("planned_start_date") @db.Date
+  plannedEndDate        DateTime?        @map("planned_end_date") @db.Date
+  // Stamped automatically on status transitions (`in_progress` / `done`)
+  // when blank; editable thereafter via the edit form.
+  actualStartDate       DateTime?        @map("actual_start_date") @db.Date
+  actualEndDate         DateTime?        @map("actual_end_date") @db.Date
+
+  // System
+  createdAt             DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdById           String           @map("created_by_id") @db.Uuid
+  createdBy             Profile          @relation("RenovationCreatedBy", fields: [createdById], references: [id])
+  updatedAt             DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // Soft-delete — same pattern as Properties + Contacts.
+  deletedAt             DateTime?        @map("deleted_at") @db.Timestamptz(6)
+  deletedById           String?          @map("deleted_by_id") @db.Uuid
+  deletedBy             Profile?         @relation("RenovationDeletedBy", fields: [deletedById], references: [id])
+
+  activities            RenovationActivity[]
+  statusHistory         RenovationStatusHistory[]
+
+  @@index([propertyId])
+  @@index([requestedByContactId])
+  @@index([managerId])
+  @@index([status])
+  @@index([deletedAt])
+  @@index([createdAt])
+  @@map("renovations")
+  @@schema("public")
+}
+
+// `model RenovationTask` was dropped 20.05.2026 (Round 5) — replaced
+// entirely by RenovationActivity in the template-driven pivot. The
+// `RenovationTaskStatus` enum stays in the schema because RenovationActivity
+// reuses it (4 states: planned / in_progress / done / cancelled). The
+// `renovation.task.*` audit-event types also stay in the AuditAction union
+// for backwards compatibility with historical events.
+
+// Per-record status history, mirrors `PropertyStatusHistory`. Denormalised
+// for fast detail-page rendering; the audit log is the system-wide event
+// ledger. See `renovations.md` §11 for the rationale.
+model RenovationStatusHistory {
+  id           String           @id @default(uuid()) @db.Uuid
+  renovationId String           @map("renovation_id") @db.Uuid
+  renovation   Renovation       @relation(fields: [renovationId], references: [id], onDelete: Cascade)
+  fromStatus   RenovationStatus? @map("from_status")
+  toStatus     RenovationStatus @map("to_status")
+  authorId     String           @map("author_id") @db.Uuid
+  author       Profile          @relation("RenovationStatusAuthor", fields: [authorId], references: [id])
+  note         String?
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([renovationId, createdAt])
+  @@map("renovation_status_history")
+  @@schema("public")
+}
+
+// Admin-managed catalog of work teams. See `specs/renovations.md` §3.7.
+// Three fields by design: name, specialty, totalPeople. No profile-membership
+// table (locked answer 16); as a consequence absence-module integration is
+// structurally impossible (locked answer 12).
+//
+// `totalPeople` is a live value — capacity checks read it directly. Activity
+// templates and renovation activities snapshot per-row people-required +
+// duration, but the team's headcount itself is not snapshotted.
+model Team {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String
+  specialty    String?
+  totalPeople  Int      @default(0) @map("total_people")
+
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdById  String   @map("created_by_id") @db.Uuid
+  createdBy    Profile  @relation("TeamCreatedBy", fields: [createdById], references: [id])
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Soft-delete — same pattern as Renovations, Properties, Contacts.
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+  deletedById  String?   @map("deleted_by_id") @db.Uuid
+  deletedBy    Profile?  @relation("TeamDeletedBy", fields: [deletedById], references: [id])
+
+  templates           ActivityTemplate[]
+  renovationActivities RenovationActivity[]
+
+  // Unique name among non-deleted rows enforced in the action layer (Prisma
+  // partial unique indexes aren't first-class).
+  @@index([deletedAt])
+  @@map("teams")
+  @@schema("public")
+}
+
+// Admin-managed catalog of renovation activities. See `specs/renovations.md`
+// §3.6. Each row carries duration-per-apartment-size + a fixed team + a
+// fixed people-required count. The `bathroomMultiplied` flag indicates the
+// 5 bathroom-specific activities whose duration scales by
+// `Renovation.bathroomCount` at load time.
+//
+// Catalog edits do **not** propagate to in-flight renovations (locked answer
+// 14); `RenovationActivity` snapshots the values at load time.
+model ActivityTemplate {
+  id                  String   @id @default(uuid()) @db.Uuid
+  name                String
+  // Nullable = "Outsourced — no team" (zero capacity impact, just adds days).
+  teamId              String?  @map("team_id") @db.Uuid
+  team                Team?    @relation(fields: [teamId], references: [id])
+  peopleRequired      Int      @default(0) @map("people_required")
+  bathroomMultiplied  Boolean  @default(false) @map("bathroom_multiplied")
+  // Half-day granularity (0.5 step) stored as Decimal(4,1) — same precision
+  // as `RenovationActivity.durationDays`.
+  durationStudio      Decimal  @default(0) @map("duration_studio")     @db.Decimal(4, 1)
+  durationTwoRoom     Decimal  @default(0) @map("duration_two_room")   @db.Decimal(4, 1)
+  durationThreeRoom   Decimal  @default(0) @map("duration_three_room") @db.Decimal(4, 1)
+  durationFourRoom    Decimal  @default(0) @map("duration_four_room")  @db.Decimal(4, 1)
+  // Order in the catalog AND default chain-load order. Matches the Excel
+  // row order in the initial seed; admin-reorderable thereafter.
+  sortOrder           Int      @default(0) @map("sort_order")
+
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdById  String   @map("created_by_id") @db.Uuid
+  createdBy    Profile  @relation("ActivityTemplateCreatedBy", fields: [createdById], references: [id])
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+  deletedById  String?   @map("deleted_by_id") @db.Uuid
+  deletedBy    Profile?  @relation("ActivityTemplateDeletedBy", fields: [deletedById], references: [id])
+
+  renovationActivities RenovationActivity[]
+
+  @@index([teamId])
+  @@index([deletedAt])
+  @@index([sortOrder])
+  @@map("activity_templates")
+  @@schema("public")
+}
+
+// Per-renovation instance of an `ActivityTemplate`. Snapshots the template's
+// name + team + people-required + duration at load time; the `templateId`
+// reference is kept (nullable) for traceability but the runtime UI reads
+// the local copies. See `specs/renovations.md` §3.4.
+//
+// Replaces `RenovationTask` from the free-task era. Old `RenovationTask`
+// rows remain readable during the transition; the new create flow writes
+// `RenovationActivity` exclusively.
+model RenovationActivity {
+  id             String               @id @default(uuid()) @db.Uuid
+  renovationId   String               @map("renovation_id") @db.Uuid
+  renovation     Renovation           @relation(fields: [renovationId], references: [id], onDelete: Cascade)
+
+  templateId     String?              @map("template_id") @db.Uuid
+  template       ActivityTemplate?    @relation(fields: [templateId], references: [id])
+
+  // Snapshots — copied from the template at load time. All editable inline.
+  name           String
+  teamId         String?              @map("team_id") @db.Uuid
+  team           Team?                @relation(fields: [teamId], references: [id])
+  peopleRequired Int                  @default(0) @map("people_required")
+  // Half-day granularity (0.5 step). For bathroom-multiplied templates this
+  // already reflects `template.duration * renovation.bathroomCount`.
+  durationDays   Decimal              @default(0) @map("duration_days") @db.Decimal(5, 1)
+
+  startDate      DateTime?            @map("start_date") @db.Date
+  endDate        DateTime?            @map("end_date") @db.Date
+
+  status         RenovationTaskStatus @default(planned)
+  sortOrder      Int                  @default(0) @map("sort_order")
+
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdById    String   @map("created_by_id") @db.Uuid
+  createdBy      Profile  @relation("RenovationActivityCreatedBy", fields: [createdById], references: [id])
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([renovationId, sortOrder])
+  @@index([teamId, startDate])
+  @@index([teamId, endDate])
+  @@index([templateId])
+  @@map("renovation_activities")
+  @@schema("public")
+}
+
+// Seeded set of leave categories. `code` is the natural primary key.
+model AbsenceCategory {
+  code               String  @id
+  labelEn            String  @map("label_en")
+  labelBg            String  @map("label_bg")
+  deductsFromPaid    Boolean @default(false) @map("deducts_from_paid")
+  allowsHalfDay      Boolean @default(true)  @map("allows_half_day")
+  requiresApproval   Boolean @default(true)  @map("requires_approval")
+  allowsRetroactive  Boolean @default(false) @map("allows_retroactive")
+  requiresDocument   Boolean @default(true)  @map("requires_document")
+  colorHex           String  @map("color_hex")
+
+  requests AbsenceRequest[]
+
+  @@map("categories")
+  @@schema("absence")
+}
+
+model AbsenceRequest {
+  id                 String                @id @default(uuid()) @db.Uuid
+  employeeId         String                @map("employee_id") @db.Uuid
+  employee           Profile               @relation("AbsenceEmployee", fields: [employeeId], references: [id])
+  categoryCode       String                @map("category_code")
+  category           AbsenceCategory       @relation(fields: [categoryCode], references: [code])
+  startDate          DateTime              @map("start_date") @db.Date
+  endDate            DateTime              @map("end_date") @db.Date
+  startHalf          Boolean               @default(false) @map("start_half")
+  endHalf            Boolean               @default(false) @map("end_half")
+  workingDaysCount   Decimal               @map("working_days_count") @db.Decimal(4, 1)
+  status             AbsenceRequestStatus  @default(pending)
+  currentApproverId  String?               @map("current_approver_id") @db.Uuid
+  currentApprover    Profile?              @relation("AbsenceApprover", fields: [currentApproverId], references: [id])
+  submittedAt        DateTime              @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  decidedAt          DateTime?             @map("decided_at") @db.Timestamptz(6)
+  decidedById        String?               @map("decided_by_id") @db.Uuid
+  decidedBy          Profile?              @relation("AbsenceDecider", fields: [decidedById], references: [id])
+  rejectionComment   String?               @map("rejection_comment")
+  documentPath       String?               @map("document_path")
+  lateSubmission     Boolean               @default(false) @map("late_submission")
+  oversizeFlag       Boolean               @default(false) @map("oversize_flag")
+  createdVia         CreatedVia            @default(self) @map("created_via")
+  notes              String?
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  anomalies AnomalyFlag[]
+
+  @@index([employeeId, startDate])
+  @@index([status, currentApproverId])
+  @@map("absence_requests")
+  @@schema("absence")
+}
+
+// Working-days calendar, populated by admin per year. Source of truth for
+// fn_working_days. When absent, the function falls back to Mon–Fri.
+model CalendarYear {
+  year         Int      @id
+  uploadedById String?  @map("uploaded_by_id") @db.Uuid
+  uploadedBy   Profile? @relation(fields: [uploadedById], references: [id])
+  uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  locked       Boolean  @default(false)
+
+  days CalendarDay[]
+
+  @@map("calendar_years")
+  @@schema("absence")
+}
+
+model CalendarDay {
+  day         DateTime     @id @db.Date
+  isWorking   Boolean      @map("is_working")
+  holidayName String?      @map("holiday_name")
+  year        Int
+  yearRef     CalendarYear @relation(fields: [year], references: [year])
+
+  @@index([year])
+  @@map("calendar_days")
+  @@schema("absence")
+}
+
+// Admin-set disclaimer attached to a specific day, visible to the whole team
+// on the shared calendar. Independent of CalendarDay — purely informational,
+// has NO effect on isWorking, balances, or absence calculations. Example use:
+// "Не сключвайте сделки" on the last 2 business days of the month.
+model CalendarNote {
+  day       DateTime @id @db.Date
+  note      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("calendar_notes")
+  @@schema("absence")
+}
+
+model AbsenceNotification {
+  id          String    @id @default(uuid()) @db.Uuid
+  recipientId String    @map("recipient_id") @db.Uuid
+  recipient   Profile   @relation(fields: [recipientId], references: [id])
+  kind        String
+  payload     Json
+  readAt      DateTime? @map("read_at") @db.Timestamptz(6)
+  emailSentAt DateTime? @map("email_sent_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([recipientId, createdAt])
+  @@map("notifications")
+  @@schema("absence")
+}
+
+model AnomalyFlag {
+  id           String          @id @default(uuid()) @db.Uuid
+  requestId    String          @map("request_id") @db.Uuid
+  request      AbsenceRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  rule         AnomalyRule
+  severity     AnomalySeverity @default(warn)
+  detectedAt   DateTime        @default(now()) @map("detected_at") @db.Timestamptz(6)
+  resolvedAt   DateTime?       @map("resolved_at") @db.Timestamptz(6)
+  resolvedById String?         @map("resolved_by_id") @db.Uuid
+  resolvedBy   Profile?        @relation(fields: [resolvedById], references: [id])
+  resolveNote  String?         @map("resolve_note")
+
+  @@index([rule, detectedAt])
+  @@index([requestId])
+  @@map("anomaly_flags")
+  @@schema("absence")
+}

@@ -1,0 +1,52 @@
+{
+  "name": "vminvest-erp",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "prisma generate",
+    "db:push": "dotenv -e .env.local -- prisma db push",
+    "db:migrate": "dotenv -e .env.local -- prisma migrate dev",
+    "db:exec": "dotenv -e .env.local -- prisma db execute --schema prisma/schema.prisma --file",
+    "db:studio": "dotenv -e .env.local -- prisma studio",
+    "contacts:import": "dotenv -e .env.local -- tsx scripts/import-contacts.ts",
+    "properties:import": "dotenv -e .env.local -- tsx scripts/import-properties.ts",
+    "contracts:import": "dotenv -e .env.local -- tsx scripts/import-contracts.ts",
+    "invoices:backfill-anomalies": "dotenv -e .env.local -- tsx scripts/backfill-invoice-anomalies.ts",
+    "sellers:check": "dotenv -e .env.local -- tsx scripts/check-seller-coverage.ts",
+    "renovations:seed-catalog": "dotenv -e .env.local -- tsx scripts/seed-renovation-catalog.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.2",
+    "@prisma/client": "^6.1.0",
+    "@supabase/ssr": "^0.5.2",
+    "@supabase/supabase-js": "^2.47.10",
+    "next": "^15.1.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "resend": "^4.0.1",
+    "xlsx": "^0.18.5",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "@typescript-eslint/eslint-plugin": "^8.20.0",
+    "@typescript-eslint/parser": "^8.20.0",
+    "autoprefixer": "^10.4.20",
+    "csv-parse": "^6.2.1",
+    "dotenv-cli": "^11.0.0",
+    "eslint": "^9.18.0",
+    "eslint-config-next": "^15.1.4",
+    "postcss": "^8.5.1",
+    "prisma": "^6.1.0",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.3"
+  }
+}
